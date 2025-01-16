@@ -1,78 +1,44 @@
-const white_list = [
-'1.1.1.1',
-'123.123.123.123'
+const WHITE_LIST = [
+  'nnn.nnn.nnn.nnn'
 ];
-addEventListener("fetch", event => {
-  event.respondWith(fetchAndReplace(event.request))
-})
 
-async function fetchAndReplace(request) {
+// Paths that require IP whitelist checking
+const PROTECTED_PATHS = [
+  '/admin/',
+  '/pages/'
+];
 
-  let modifiedHeaders = new Headers()
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    const clientIP = request.headers.get("cf-connecting-ip") || request.cf?.ip;
+    
+    // Check if the requested path starts with any of the protected paths
+    const isProtectedPath = PROTECTED_PATHS.some(path => 
+      url.pathname.toLowerCase().startsWith(path.toLowerCase())
+    );
+    
+    // If it's not a protected path, allow access without IP check
+    if (!isProtectedPath) {
+      return fetch(request);
+    }
+    
+    // For protected paths, check IP whitelist
+    if (WHITE_LIST.includes(clientIP)) {
+      return fetch(request);
+    }
 
-  modifiedHeaders.set('Content-Type', 'text/html')
-  modifiedHeaders.append('Pragma', 'no-cache')
+    const modifiedHeaders = new Headers({
+      'Content-Type': 'text/html;charset=UTF-8',
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'Pragma': 'no-cache'
+    });
 
-
-  //Allow users from trusted into site
-  if (white_list.indexOf(request.headers.get("cf-connecting-ip")) > -1) 
-  {
-    //Fire all other requests directly to our WebServers
-    return fetch(request)
-  }
-  else //Return maint page if you're not calling from a trusted IP
-  {
-    // Return modified response.
     return new Response(maintPage, {
       status: 503,
       headers: modifiedHeaders
-    })
+    });
   }
-}
+};
 
-let maintPage = `
-
-<!doctype html>
-<title>Site Maintenance</title>
-<style>
-  body { 
-        text-align: center; 
-        padding: 150px; 
-        background: url('data:image/jpeg;base64,<base64EncodedImage>'); 
-        background-size: cover;
-        -webkit-background-size: cover;
-        -moz-background-size: cover;
-        -o-background-size: cover;
-      }
-
-    .content {
-        background-color: rgba(255, 255, 255, 0.75); 
-        background-size: 100%;      
-        color: inherit;
-        padding-top: 1px;
-        padding-bottom: 10px;
-        padding-left: 100px;
-        padding-right: 100px;
-        border-radius: 15px;        
-    }
-
-  h1 { font-size: 40pt;}
-  body { font: 20px Helvetica, sans-serif; color: #333; }
-  article { display: block; text-align: left; width: 75%; margin: 0 auto; }
-  a:hover { color: #333; text-decoration: none; }  
-
-
-</style>
-
-<article>
-
-        <div class="background">
-            <div class="content">
-        <h1>We&rsquo;ll be back soon!</h1>        
-            <p>We&rsquo;re very sorry for the inconvenience but we&rsquo;re performing maintenance. Please check back soon...</p>
-            <p>&mdash; <B><font color="red">{</font></B>RESDEVOPS<B><font color="red">}</font></B> Team</p>
-        </div>
-    </div>
-
-</article>
-`;
+const maintPage = `/* Your HTML content */`;
