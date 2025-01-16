@@ -1,141 +1,117 @@
-﻿<#
-	Calls Cloudflare API to update/query the status of Cloudflare Workers, which provide 
-	maintenance mode functionality.
-#>
-
-<#===============================================================================================#>
-
-<#
-.SYNOPSIS
-    Fetches all of the DNS routes for a given Cloudflare Zone ID
-.PARAMETER Headers
-    HashTable of Requst headers to auth against Cloudflare (API-Key/Email Address)
-.PARAMETER zoneID
-    Unique Cloudflare ID representing a DNS zone which contains Workers 
-#>
-function Get-WorkerRoutes(
-	[hashtable]$Headers,
-	[string]$zoneID) {
-	try {		
-		$workerRoutes = Invoke-RestMethod -Method Get -Uri "https://api.cloudflare.com/client/v4/zones/$($zoneId)/workers/routes" -Headers $Headers
-
-		if ($workerRoutes.result.count -gt 0) {
-			return $workerRoutes.result
-		}		
-	}
-	catch {
-		Write-Error $_.Exception.Message
-		return $null
-	}
-
-	return $null
+function Get-WorkerRoutes {
+    param (
+        [Parameter(Mandatory)]
+        [hashtable]$Headers,
+        [Parameter(Mandatory)]
+        [string]$zoneID
+    )
+    
+    try {
+        $uri = "https://api.cloudflare.com/client/v4/zones/$zoneID/workers/routes"
+        $workerRoutes = Invoke-RestMethod -Method Get -Uri $uri -Headers $Headers
+        
+        return $workerRoutes.result.Count -gt 0 ? $workerRoutes.result : $null
+    }
+    catch {
+        Write-Error $_.Exception.Message
+        throw
+    }
 }
 
+function Set-WorkerRouteStatus {
+    param (
+        [Parameter(Mandatory)]
+        [PsCustomObject]$workerRoute,
+        [Parameter(Mandatory)]
+        [hashtable]$headers,
+        [Parameter(Mandatory)]
+        [string]$zoneId,
+        [Parameter()]
+        [object]$workerScriptName
+    )
+    
+    try {
+        $ApiBody = @{
+            id      = $workerRoute.Id
+            pattern = $workerRoute.Pattern
+            script  = $workerScriptName
+        } | ConvertTo-Json
 
-<#
-.SYNOPSIS
-	Updates and eventually checks the status of a Cloudflare worker for a given route
-.PARAMETER workerRoute
-	Object which contains the unique ID of the route, the pattern of the rule to be enable (e.g. *subdomain.example.com/*), 
-	enabled boolean indicating if the route has been enabled/disabled.
-.PARAMETER Headers
-    HashTable of Requst headers to auth against Cloudflare (API-Key/Email Address)
-.PARAMETER zoneID
-	Unique Cloudflare ID representing a DNS zone which contains Workers 
-.PARAMETER workerScriptName
-	Unique name representing the script of the worker which to enable for a given route. This value is $null if we wish to disable 
-	the script on a given route.
-#>
-function Set-WorkerRouteStatus(
-	[PsCustomObject]$workerRoute,	
-	[hashtable]$headers,
-	[string]$zoneId,
-	[object]$workerScriptName) {	
-	try {
-		#Generate JSON payload + convert to JSON (Setting as a PSCustomObject preserves the order or properties in payload):
-		$ApiBody = [pscustomobject]@{
-			id      = $workerRoute.Id
-			pattern = $workerRoute.Pattern
-			script  = $workerScriptName
-		} | Convertto-Json		
+        $uri = "https://api.cloudflare.com/client/v4/zones/$zoneId/workers/routes/$($workerRoute.Id)"
+        
+        $result = Invoke-RestMethod -Uri $uri `
+            -Headers $headers `
+            -Body $ApiBody `
+            -Method Put `
+            -ContentType 'application/json'
 
-		#Enable script for the route.
-		Invoke-RestMethod -Uri "https://api.cloudflare.com/client/v4/zones/$($zoneId)/workers/routes/$($workerRoute.Id)" `
-			-Headers $headers -Body $ApiBody -Method PUT -ContentType 'application/json'
-
-		Write-Host "Set script '$workerScriptName' on worker route '$($workerRoute.Pattern)'."
-		
-		#We now need to verify that the workerRouteStatus we just set is returned when we query it (double-check)
-		#if not, fail the deploy outright - someone needs to investigate what's wrong.
-		$CheckRoute = Invoke-RestMethod -Uri "https://api.cloudflare.com/client/v4/zones/$($zoneId)/workers/routes/$($workerRoute.Id)" -Headers $headers -Method GET
-
-		if (-not (($CheckRoute.result.script) -eq $workerScriptName)) {
-			if ($null -eq $workerScriptName) {
-				Write-Error "Attempted to disable CloudFlareRoute '$($workerRoute.Id)' with the pattern '$($workerRoute.Pattern)', however the CloudFlare API
-			is not returning the exepected result."
-			}
-			else {
-				Write-Error "Attempted to update CloudFlareRoute '$($workerRoute.Id)' with the pattern '$($workerRoute.Pattern)' and the route '$workerScriptName', however the CloudFlare API
-			is not returning the exepected result."				
-			}
-			
-			throw;			
-		}
-	}
-	catch {
-		Write-Host "Error updating $($workerRoute.pattern)"
-		Write-Error $_.Exception.Message
-		throw;
-	}
+        Write-Host "Set script '$workerScriptName' on worker route '$($workerRoute.Pattern)'"
+        
+        # Verify the update
+        $CheckRoute = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get
+        
+        if ($CheckRoute.result.script -ne $workerScriptName) {
+            $errorMessage = if ($null -eq $workerScriptName) {
+                "Failed to disable CloudFlareRoute '$($workerRoute.Id)' with pattern '$($workerRoute.Pattern)'"
+            } else {
+                "Failed to update CloudFlareRoute '$($workerRoute.Id)' with pattern '$($workerRoute.Pattern)' and route '$workerScriptName'"
+            }
+            throw $errorMessage
+        }
+    }
+    catch {
+        Write-Error "Error updating $($workerRoute.pattern): $_"
+        throw
+    }
 }
 
-##Main:
+# Configuration
+$config = @{
+    CfApiKey = "xxxx123123"  # Better to use environment variable or secure string
+    CfZoneId = "zoneID123zoneID123zoneID123zoneID123zoneID123"
+    RoutePattern = "resdevops.com/*"
+    WorkerScriptName = "some-worker-name"
+}
 
-#Globals vars:
-[string]${Maintenance.CfApiKey} = "xxxx123123"
-[string]${Maintenance.CfEmail} = "test@example.com"
-[string]${Maintenance.CfZoneId} = "zoneID123zoneID123zoneID123zoneID123zoneID123"
-[string]${Maintenance.routePattern} = "resdevops.com/*"
-[string]${Maintenance.WorkerScriptName} = "some-worker-name"
+try {
+    $apiRequestHeaders = @{
+        'Authorization' = "Bearer $($config.CfApiKey)"
+        'Content-Type' = 'application/json'
+    }
 
+    $allWorkerRoutes = Get-WorkerRoutes -Headers $apiRequestHeaders -zoneID $config.CfZoneId
+    
+    if (-not $allWorkerRoutes) {
+        throw "No worker routes returned for zoneID $($config.CfZoneId)"
+    }
 
-try {	
-	#Assemble CF API Request Auth headers
-	$apiRequestHeaders = @{
-		'X-Auth-Key'   = ${Maintenance.CfApiKey}
-		'X-Auth-Email' = ${Maintenance.CfEmail}
-	}
-
-
-	$allWorkerRoutes = Get-WorkerRoutes -Headers $apiRequestHeaders -zoneID ${Maintenance.CfZoneId}
-
-	if ($allWorkerRoutes -ne $null) {	
-		#If we want to toggle multiple different patterns (comma seperated), split them out:
-		$allRoutePatterns = (${Maintenance.RoutePattern} -split ",")
-
-		foreach ($routePattern in $allRoutePatterns) {	
-			#Its possble the Pattern we pass in could result in multiple Route matches - We'll
-			#need to enumerate over them regarless:
-			$filteredWorkerRoutes = $allWorkerRoutes | ? { $_.Pattern -eq $routePattern }
-
-			foreach ($filteredWorkerRoute in $filteredWorkerRoutes) {
-
-				Write-Host "Processing $filteredWorkerRoute."
-				switch ((${Maintenance.routeAction}).ToLower()) {
-					"enable" { Set-WorkerRouteStatus -workerRoute $filteredWorkerRoute -headers $apiRequestHeaders -zoneId ${Maintenance.CfZoneId} -workerScriptName ${Maintenance.WorkerScriptName}; break }
-					"disable" { Set-WorkerRouteStatus -workerRoute $filteredWorkerRoute -headers $apiRequestHeaders -zoneId ${Maintenance.CfZoneId} -workerScriptName $null ; break}
-					"status" { Write-Host "Route: $($filteredWorkerRoute.pattern), Script value: $($filteredWorkerRoute.script)"; break }
-					default { Write-Error "Maintenane routeAction was not an expected value (enable/disable/status)."; break }
-				}
-			}
-		}
-		
-		Write-Host "Maintenance-mode task complete."
-	}
-	else {
-		Write-Error "No worker routes returned for the zoneID ${Maintenance.CfZoneId}; Please add required routes and re-run the script"
-	}
+    $allRoutePatterns = $config.RoutePattern -split ","
+    
+    foreach ($routePattern in $allRoutePatterns) {
+        $filteredWorkerRoutes = $allWorkerRoutes.Where({ $_.Pattern -eq $routePattern })
+        
+        foreach ($route in $filteredWorkerRoutes) {
+            Write-Host "Processing $route"
+            switch ($config.routeAction.ToLower()) {
+                'enable' { 
+                    Set-WorkerRouteStatus -workerRoute $route -headers $apiRequestHeaders -zoneId $config.CfZoneId -workerScriptName $config.WorkerScriptName 
+                }
+                'disable' { 
+                    Set-WorkerRouteStatus -workerRoute $route -headers $apiRequestHeaders -zoneId $config.CfZoneId -workerScriptName $null 
+                }
+                'status' { 
+                    Write-Host "Route: $($route.pattern), Script value: $($route.script)" 
+                }
+                default { 
+                    throw "Invalid maintenance routeAction. Use: enable/disable/status" 
+                }
+            }
+        }
+    }
+    
+    Write-Host "Maintenance-mode task complete."
 }
 catch {
-	Write-Error $_
+    Write-Error $_
+    exit 1
 }
